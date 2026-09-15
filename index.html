@@ -460,14 +460,14 @@ function drawPreview(){
 function drawQueue(){
   const y = launchY;
   drawBalloon(launchX, y, queue[0], 1.25);
-  // sıradaki iki balon
-  const bx = W/2 + Math.min(150, gridSize*0.38);
+  // sıradaki iki balon — dar ekranda taşmaması için sağ kenardan hizalanır
+  const b3 = W - 34, bx = b3 - 46;
   ctx.save();
   ctx.font = '11px system-ui'; ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.textAlign='center';
-  ctx.fillText('SIRADAKİ', bx+26, y-32);
+  ctx.fillText('SIRADAKİ', (bx+b3)/2, y-34);
   ctx.restore();
   if(queue[1]) drawBalloon(bx, y, queue[1], 0.8);
-  if(queue[2]) drawBalloon(bx+52, y, queue[2], 0.6);
+  if(queue[2]) drawBalloon(b3, y, queue[2], 0.6);
   // fırlatma kaidesi
   ctx.beginPath(); ctx.ellipse(launchX, launchY+26, 34, 9, 0,0,6.3);
   ctx.fillStyle='rgba(255,255,255,.12)'; ctx.fill();
