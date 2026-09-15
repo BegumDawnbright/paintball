@@ -16,6 +16,9 @@
          background:#0d0f13e0; color:#fff; text-align:center; gap:14px; }
   #msg h1 { font-size:30px; }
   #msg p { font-size:15px; opacity:.8; }
+  #snd { position:absolute; right:12px; bottom:12px; width:42px; height:42px; border:0; border-radius:50%;
+         background:#ffffff1a; color:#fff; font-size:19px; cursor:pointer; line-height:42px; }
+  #snd.off { opacity:.45; }
   #msg button { pointer-events:auto; padding:12px 28px; font-size:16px; font-weight:700; border:0; border-radius:30px;
                 background:#ffd24a; color:#222; cursor:pointer; }
 </style>
@@ -28,12 +31,69 @@
     <div style="text-align:right">EŞLEŞME<br><span id="match">0%</span><br>
       <span style="opacity:.7;font-weight:500">Hedef: <span id="goal">70</span>%</span></div>
   </div>
+  <button id="snd" title="Ses">🔊</button>
   <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button></div>
 </div>
 <script>
 (function(){
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const $ = id => document.getElementById(id);
+
+/* ---------------- ses (kodla üretilir, dosya yok) ---------------- */
+let actx = null, muted = false, noise = null;
+function audio(){
+  if(!actx){
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return null;
+    actx = new AC();
+    // 1 sn'lik beyaz gürültü, sıçrama ve fırlatma sesleri bundan türetilir
+    noise = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const d = noise.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+  }
+  if(actx.state === 'suspended') actx.resume();
+  return muted ? null : actx;
+}
+// gürültü tabanlı vuruş: sıçrama, fırlatma
+function burst(dur, f0, f1, vol, q){
+  const a = audio(); if(!a) return;
+  const src = a.createBufferSource(); src.buffer = noise; src.loop = true;
+  const flt = a.createBiquadFilter(); flt.type='bandpass'; flt.Q = q||1.2;
+  flt.frequency.setValueAtTime(f0, a.currentTime);
+  flt.frequency.exponentialRampToValueAtTime(Math.max(40,f1), a.currentTime+dur);
+  const g = a.createGain();
+  g.gain.setValueAtTime(vol, a.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, a.currentTime+dur);
+  src.connect(flt).connect(g).connect(a.destination);
+  src.start(); src.stop(a.currentTime+dur+0.02);
+}
+// tonlu nota: gerdirme tıkırtısı, bitiş ezgisi
+function tone(freq, dur, vol, type, delay){
+  const a = audio(); if(!a) return;
+  const t = a.currentTime + (delay||0);
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type||'sine'; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g).connect(a.destination);
+  o.start(t); o.stop(t+dur+0.02);
+}
+// Kendi ses dosyalarını koymak istersen: aşağıdaki her satırı bununla değiştir —
+//   const s = new Audio('ses/splat.mp3'); s.volume = 0.6; s.play();
+// başka hiçbir yere dokunmana gerek yok, olaylar zaten buraya bağlı.
+const sfx = {
+  pull(){ tone(320, 0.05, 0.05, 'square'); },                    // germeye başlarken
+  shoot(area){ burst(0.20, 1600, 380, 0.18, 0.9);               // havayı yaran fırlatma
+               tone(220+140/Math.sqrt(area), 0.12, 0.06, 'triangle'); },
+  splat(area){ const lo = 240/Math.sqrt(area);                  // büyük balon = pes "şpat"
+               burst(0.26, 900+lo*3, lo, 0.32, 0.7);
+               tone(lo+60, 0.1, 0.09, 'sine'); },
+  mix(){ tone(660, 0.09, 0.05, 'sine'); },                       // üst üste boya (renk karıştı)
+  win(){ [523,659,784,1047].forEach((f,i)=> tone(f, 0.30, 0.10, 'triangle', i*0.11)); },
+  lose(){ [392,330,262].forEach((f,i)=> tone(f, 0.34, 0.09, 'sine', i*0.14)); },
+  empty(){ tone(150, 0.12, 0.06, 'square'); }                    // balon bitti
+};
 
 /* ---------------- renk yardımcıları ---------------- */
 function hex2rgb(h){ return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
@@ -165,6 +225,54 @@ const N = 16;
 let W, H, cell, gridX, gridY, gridSize, launchX, launchY;
 let level = 0, target = [], paint = [], ammo = 0, queue = [], deck = [], matchPct = 0;
 let drag = null, flying = null, splats = [], state = 'aim';
+let bits = [], shake = 0;   // uçuşan boya damlaları / balon parçaları, ekran sarsıntısı
+
+// çarpma anında: balon kaybolur, yerine boya damlaları ve lastik parçaları saçılır
+function spawnBurst(x, y, col, area){
+  const n = 14 + Math.round(area*2.2);
+  for(let i=0;i<n;i++){
+    const a = Math.random()*6.283, sp = (60 + Math.random()*260) * (0.7+area*0.06);
+    bits.push({ kind:'drop', x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 60,
+                r: cell*(0.07+Math.random()*0.16), c: col, t:0, life: 0.45+Math.random()*0.5 });
+  }
+  for(let i=0;i<7;i++){                       // patlayan balonun lastik parçaları
+    const a = Math.random()*6.283, sp = 120+Math.random()*220;
+    bits.push({ kind:'shard', x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-120,
+                r: cell*0.16, c: col, rot: Math.random()*6.283, vr:(Math.random()-0.5)*18,
+                t:0, life: 0.35+Math.random()*0.3 });
+  }
+  shake = Math.min(9, 2.5 + area*0.5);
+}
+function updateBits(dt){
+  for(let i=bits.length-1;i>=0;i--){
+    const p = bits[i];
+    p.t += dt;
+    if(p.t >= p.life){ bits.splice(i,1); continue; }
+    p.vy += 900*dt;                  // yerçekimi
+    p.vx *= (1-2.2*dt); p.vy *= (1-0.6*dt);
+    p.x += p.vx*dt; p.y += p.vy*dt;
+    if(p.kind==='shard') p.rot += p.vr*dt;
+  }
+  if(shake > 0) shake = Math.max(0, shake - dt*32);
+}
+function drawBits(){
+  for(const p of bits){
+    const k = 1 - p.t/p.life;
+    ctx.globalAlpha = Math.min(1, k*1.6);
+    if(p.kind==='drop'){
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.r*(0.8+k*0.5), p.r*(0.8+k*0.5)*(1+Math.min(1.4,Math.abs(p.vy)/700)),
+                  Math.atan2(p.vy,p.vx)-1.57, 0, 6.283);
+      ctx.fillStyle = rgbs(p.c); ctx.fill();
+    } else {
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = rgbs(p.c);
+      ctx.fillRect(-p.r, -p.r*0.45, p.r*2, p.r*0.9);
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
 let maxPull = 200, maxRange = 600;
 
 // sadece hedef resimde geçen renkler — çözülemez bölüm olmasın
@@ -269,10 +377,11 @@ function applySplat(cx, cy, b){
   const color = b.col;
   for(const s of splatCells(cx, cy, b)){
     const cur = paint[s.y][s.x];
-    if(!cur) paint[s.y][s.x] = { c: color.slice(), w: s.cov };
+    if(!cur) paint[s.y][s.x] = { c: color.slice(), w: s.cov, pop: 1 };
     else {
       cur.c = mixPaint(cur.c, cur.w, color, s.cov);
       cur.w = Math.min(3, cur.w + s.cov);
+      cur.pop = 1;                       // boyanan kare kısa süre şişip oturur
     }
   }
   computeMatch();
@@ -340,6 +449,7 @@ function down(e){
   e.preventDefault();
   const [x,y] = pos(e);
   drag = { sx:x, sy:y, x:x, y:y };
+  sfx.pull();
 }
 function move(e){
   if(!drag) return;
@@ -359,6 +469,7 @@ function shoot(dx,dy){
   const b = queue.shift();
   if(deck.length) queue.push(deck.shift());
   const [tx,ty] = aimPoint(dx,dy,b);
+  sfx.shoot(b.w*b.h);
   ammo--; updateHUD();
   flying = { b, x:launchX, y:launchY, tx, ty, t:0, dur: 0.42 };
 }
@@ -382,13 +493,21 @@ function drawGrid(){
     ctx.fillStyle = rgbs(t, 0.20);
     ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
   }
-  // atılmış boya
+  // atılmış boya — şişme animasyonu tuvalin dışına taşmasın
+  ctx.save();
+  ctx.beginPath(); ctx.rect(gridX, gridY, gridSize, gridSize); ctx.clip();
   for(let y=0;y<N;y++) for(let x=0;x<N;x++){
     const p = paint[y][x];
     if(!p) continue;
     ctx.fillStyle = rgbs(p.c, Math.min(1, 0.55 + p.w*0.35));
-    ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+    if(p.pop > 0){                       // yeni boyanan kare şişip oturur
+      const s = 1 + 0.45*p.pop, cx0 = gridX+(x+0.5)*cell, cy0 = gridY+(y+0.5)*cell;
+      ctx.save(); ctx.translate(cx0,cy0); ctx.scale(s,s); ctx.translate(-cx0,-cy0);
+      ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+      ctx.restore();
+    } else ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
   }
+  ctx.restore();
   // grid çizgileri
   ctx.strokeStyle = 'rgba(0,0,0,.09)'; ctx.lineWidth = 1;
   ctx.beginPath();
@@ -401,25 +520,36 @@ function drawGrid(){
   ctx.strokeRect(gridX-1, gridY-1, gridSize+2, gridSize+2);
 }
 
-function drawBalloon(x,y,b,scale){
-  const sc = scale||1;
+// ang: uzun eksenin yöneleceği açı, st: gerilme (1 = normal, >1 uzun-ince)
+function drawBalloon(x,y,b,scale,ang,st){
+  const sc = scale||1, s = st||1;
   const r = 11*Math.sqrt(b.w*b.h)*sc;
   ctx.save();
   ctx.translate(x,y);
+  ctx.save();
+  if(ang !== undefined) ctx.rotate(ang + Math.PI/2);   // gövde varsayılan olarak dikey
+  ctx.scale(1/Math.sqrt(s), s);                        // gerilirken incelir (hacim korunur hissi)
+  // gövde
   ctx.beginPath();
   ctx.moveTo(0, -r*1.15);
   ctx.bezierCurveTo(r*1.15,-r*1.15, r*1.05, r*0.75, 0, r*1.2);
   ctx.bezierCurveTo(-r*1.05, r*0.75, -r*1.15,-r*1.15, 0,-r*1.15);
   ctx.fillStyle = rgbs(b.col);
   ctx.fill();
-  ctx.beginPath(); ctx.ellipse(-r*0.32,-r*0.35, r*0.28, r*0.4, -0.5, 0, 6.3);
+  // uç düğümü
+  ctx.beginPath();
+  ctx.moveTo(-r*0.16, r*1.16); ctx.lineTo(r*0.16, r*1.16); ctx.lineTo(0, r*1.42);
+  ctx.closePath(); ctx.fill();
+  // parlama
+  ctx.beginPath(); ctx.ellipse(-r*0.32,-r*0.35, r*0.26, r*0.42, -0.5, 0, 6.3);
   ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.fill();
-  // kaç kare boyayacağı balonun üstünde yazar
+  ctx.restore();
+  // kaç kare boyayacağı yazar — gerilmeden etkilenmez
   const lum = (b.col[0]*0.3+b.col[1]*0.6+b.col[2]*0.1);
   ctx.fillStyle = lum>150 ? 'rgba(0,0,0,.65)' : 'rgba(255,255,255,.9)';
-  ctx.font = 'bold '+Math.max(8, r*0.62)+'px system-ui';
+  ctx.font = 'bold '+Math.max(8, r*0.6)+'px system-ui';
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(b.w+'×'+b.h, 0, r*0.12);
+  ctx.fillText(b.w+'×'+b.h, 0, 0);
   ctx.restore();
 }
 
@@ -460,7 +590,20 @@ function drawPreview(){
 
 function drawQueue(){
   const y = launchY;
-  drawBalloon(launchX, y, queue[0], 1.25);
+  // gerdikçe balon lastikte geri kayar ve atış yönünde uzun-ince forma girer
+  let bxc = launchX, byc = y, ang, st = 1;
+  if(drag){
+    const dx = drag.x-drag.sx, dy = drag.y-drag.sy, pull = Math.hypot(dx,dy);
+    if(pull > MIN_PULL){
+      const k = Math.min(1, pull/maxPull);
+      const back = Math.min(pull*0.4, 46);
+      bxc = launchX + (dx/pull)*back;
+      byc = y + (dy/pull)*back;
+      ang = Math.atan2(-dy, -dx);          // uzun eksen atış yönünde
+      st = 1 + 0.75*k;
+    }
+  }
+  drawBalloon(bxc, byc, queue[0], 1.25, ang, st);
   // sıradaki iki balon — dar ekranda taşmaması için sağ kenardan hizalanır
   const b3 = W - 34, bx = b3 - 46;
   ctx.save();
@@ -484,6 +627,15 @@ function loop(now){
   g.addColorStop(0,'#252a33'); g.addColorStop(1,'#14161b');
   ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
 
+  updateBits(dt);
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){     // kare pop'unu söndür
+    const p = paint[y][x];
+    if(p && p.pop > 0) p.pop = Math.max(0, p.pop - dt*5);
+  }
+
+  ctx.save();
+  if(shake > 0) ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
+
   drawGrid();
 
   // uçan balon
@@ -492,9 +644,19 @@ function loop(now){
     const t = Math.min(1, flying.t);
     const x = flying.x + (flying.tx-flying.x)*t;
     const y = flying.y + (flying.ty-flying.y)*t - Math.sin(t*Math.PI)*90;
-    drawBalloon(x, y, flying.b, 1 + t*0.5);
+    // bir önceki kareye göre hız yönü → balon uçuş boyunca o yöne uzanır
+    const pt = Math.max(0, t-0.04);
+    const px = flying.x + (flying.tx-flying.x)*pt;
+    const py = flying.y + (flying.ty-flying.y)*pt - Math.sin(pt*Math.PI)*90;
+    const ang = Math.atan2(y-py, x-px);
+    drawBalloon(x, y, flying.b, 1 + t*0.45, ang, 1.45 - t*0.25);
     if(t>=1){
+      const before = flying.b.w * flying.b.h;
+      const over = splatCells(flying.tx, flying.ty, flying.b).filter(s => paint[s.y][s.x]).length;
+      sfx.splat(before);
+      if(over) sfx.mix();                       // üstüne bindiyse renk karışma sesi
       applySplat(flying.tx, flying.ty, flying.b);
+      spawnBurst(flying.tx, flying.ty, flying.b.col, before);
       splats.push({x:flying.tx, y:flying.ty, c:flying.b.col, r:Math.max(flying.b.w, flying.b.h)*cell*0.5, t:0});
       flying = null;
       if(ammo<=0) setTimeout(finish, 500);
@@ -511,6 +673,9 @@ function loop(now){
 
   if(state==='aim' && !flying && ammo>0){ drawQueue(); drawPreview(); }
 
+  drawBits();
+  ctx.restore();
+
   requestAnimationFrame(loop);
 }
 
@@ -518,6 +683,7 @@ function finish(){
   const L = LEVELS[level];
   const win = matchPct >= L.goal;
   state = 'over';
+  win ? sfx.win() : sfx.lose();
   $('mt').textContent = win ? 'Harika! 🎨' : 'Olmadı…';
   $('ms').textContent = L.name + ' — eşleşme %' + matchPct + ' (hedef %' + L.goal + ')';
   $('mb').textContent = win ? 'Sonraki Bölüm' : 'Tekrar Dene';
@@ -534,7 +700,18 @@ function solve(){
   return matchPct;
 }
 window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[level].art),
+              aim: (dx,dy) => { drag = { sx:launchX, sy:launchY, x:launchX+dx, y:launchY+dy }; },
+              fire: () => up({ preventDefault(){} }),
+              bits: () => bits.length,
               info: () => ({ H, launchY, altBosluk: Math.round(H-launchY), maxPull: Math.round(maxPull) }) };
+$('snd').addEventListener('click', e => {
+  e.stopPropagation();
+  muted = !muted;
+  $('snd').textContent = muted ? '🔇' : '🔊';
+  $('snd').classList.toggle('off', muted);
+  if(!muted) sfx.pull();
+});
+
 resize();
 loadLevel(0);
 requestAnimationFrame(loop);
