@@ -304,9 +304,10 @@ function resize(){
   gridX = (W-gridSize)/2;
   gridY = Math.max(64, H*0.10);
   launchX = W/2;
-  launchY = gridY + gridSize + Math.min(150, (H-gridY-gridSize)*0.55);
-  // tam germe = tuvalin en uzak köşesine ulaşacak menzil
-  maxPull = Math.min(W, H) * 0.32;
+  launchY = gridY + gridSize + Math.min(110, (H-gridY-gridSize)*0.38);
+  // tam germe, fırlatıcının ALTINDA kalan boşluğa sığmalı — yoksa tam menzile parmak yetişmez
+  const room = H - launchY - 24;
+  maxPull = Math.max(60, Math.min(Math.min(W,H)*0.32, room*0.88));
   maxRange = Math.hypot(gridSize/2 + cell, launchY - gridY + cell);
 }
 window.addEventListener('resize', resize);
@@ -532,7 +533,8 @@ function solve(){
   computeMatch();
   return matchPct;
 }
-window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[level].art) };
+window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[level].art),
+              info: () => ({ H, launchY, altBosluk: Math.round(H-launchY), maxPull: Math.round(maxPull) }) };
 resize();
 loadLevel(0);
 requestAnimationFrame(loop);
