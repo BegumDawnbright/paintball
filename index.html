@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Paintball</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#1b1d23; font-family:-apple-system,"Segoe UI",system-ui,sans-serif; }
+  #wrap { position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; touch-action:none; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:0; left:0; right:0; padding:10px 14px; display:flex; justify-content:space-between;
+         align-items:flex-start; color:#fff; font-size:13px; font-weight:600; pointer-events:none; text-shadow:0 1px 3px #000a; }
+  #match { font-size:22px; }
+  #msg { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
+         background:#0d0f13e0; color:#fff; text-align:center; gap:14px; }
+  #msg h1 { font-size:30px; }
+  #msg p { font-size:15px; opacity:.8; }
+  #msg button { pointer-events:auto; padding:12px 28px; font-size:16px; font-weight:700; border:0; border-radius:30px;
+                background:#ffd24a; color:#222; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="hud">
+    <div>BÖLÜM <span id="lvl">1</span><br><span style="opacity:.7;font-weight:500">Balon: <span id="ammo">0</span></span></div>
+    <div style="text-align:right">EŞLEŞME<br><span id="match">0%</span><br>
+      <span style="opacity:.7;font-weight:500">Hedef: <span id="goal">70</span>%</span></div>
+  </div>
+  <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button></div>
+</div>
+<script>
+(function(){
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+
+/* ---------------- renk yardımcıları ---------------- */
+function hex2rgb(h){ return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
+function rgb2hsl(r,g,b){
+  r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn; let h=0;
+  if(d){ if(mx===r) h=((g-b)/d+ (g<b?6:0)); else if(mx===g) h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; }
+  const l=(mx+mn)/2, s = d===0?0: d/(1-Math.abs(2*l-1));
+  return [h,s,l];
+}
+function hsl2rgb(h,s,l){
+  h=((h%360)+360)%360;
+  const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2;
+  let r,g,b;
+  if(h<60)[r,g,b]=[c,x,0]; else if(h<120)[r,g,b]=[x,c,0]; else if(h<180)[r,g,b]=[0,c,x];
+  else if(h<240)[r,g,b]=[0,x,c]; else if(h<300)[r,g,b]=[x,0,c]; else [r,g,b]=[c,0,x];
+  return [Math.round((r+m)*255),Math.round((g+m)*255),Math.round((b+m)*255)];
+}
+// boya karışımı: ton kısa yaydan harmanlanır, üst üste binen katmanlar tonu koyultur
+function mixPaint(a, wa, b, wb){
+  const A=rgb2hsl(a[0],a[1],a[2]), B=rgb2hsl(b[0],b[1],b[2]);
+  const t = wb/(wa+wb);
+  let h;
+  if(A[1]<0.08 || B[1]<0.08){ h = A[1]<0.08 ? B[0] : A[0]; }   // biri gri/siyah/beyazsa renkli olanın tonu
+  else {
+    let d = ((B[0]-A[0]+540)%360)-180;
+    h = A[0] + d*t;
+  }
+  const s = A[1]*(1-t) + B[1]*t;
+  let l = A[2]*(1-t) + B[2]*t;
+  l *= 0.90;                       // katman biriktikçe koyulaşma (boya hissi)
+  l = Math.max(0.05, l);
+  return hsl2rgb(h, Math.min(1,s*1.05), l);
+}
+function dist2(a,b){ const dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2]; return Math.sqrt(dr*dr+dg*dg+db*db); }
+
+/* ---------------- bölümler ---------------- */
+const PAL = { r:'#e5384a', o:'#f08a2c', y:'#f5cf3d', g:'#4bb85f', b:'#3a7fd5', p:'#8b53c9', k:'#3b3f4a', w:'#ffffff', c:'#45c3c9', m:'#e06aa8' };
+const LEVELS = [
+  { name:'Kalp', goal:70, cols:['r','y','b','w'], art:[
+    '................',
+    '................',
+    '...rr......rr...',
+    '..rrrr....rrrr..',
+    '.rrrrrr..rrrrrr.',
+    '.rrrrrrrrrrrrrr.',
+    '.rrrrrrrrrrrrrr.',
+    '..rrrrrrrrrrrr..',
+    '...rrrrrrrrrr...',
+    '....rrrrrrrr....',
+    '.....rrrrrr.....',
+    '......rrrr......',
+    '.......rr.......',
+    '................',
+    '................',
+    '................'] },
+  { name:'Çiçek', goal:66, cols:['r','y','b','g'], art:[
+    '................',
+    '.....mmm........',
+    '....mmmmm.......',
+    '...mmmyymm......',
+    '..mmmyyyymmm....',
+    '.mmmmyyyymmmm...',
+    '..mmmyyyymmm....',
+    '...mmmyymm......',
+    '....mmmmm.......',
+    '......gg........',
+    '.....gg.gg......',
+    '.....gg..gg.....',
+    '....gg....g.....',
+    '.....gg.........',
+    '......g.........',
+    '................'] },
+  { name:'Gün Batımı', goal:64, cols:['r','y','b','p'], art:[
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+    'pppppppppppppppp',
+    'pppppppppppppppp',
+    'oooooooooooooooo',
+    'ooooooyyyyoooooo',
+    'oooooyyyyyyooooo',
+    'ooooyyyyyyyyoooo',
+    'oooooyyyyyyooooo',
+    'ooooooyyyyoooooo',
+    'oooooooooooooooo',
+    'rrrrrrrrrrrrrrrr',
+    'rrrrrrrrrrrrrrrr',
+    'kkkkkkkkkkkkkkkk',
+    'kkkkkkkkkkkkkkkk',
+    'kkkkkkkkkkkkkkkk'] },
+  { name:'Kelebek', goal:58, art:[
+    '................',
+    '..ppp..kk..ppp..',
+    '.pmmmp.kk.pmmmp.',
+    'pmmoommkkmmoommp',
+    'pmoyyomkkmoyyomp',
+    'pmmoommkkmmoommp',
+    '.pmmmmpkkpmmmmp.',
+    '..pmmmpkkpmmmp..',
+    '...cccpkkpccc...',
+    '..ccccckkccccc..',
+    '.ccyycckkccyycc.',
+    '.cccccckkcccccc.',
+    '..ccccpkkpcccc..',
+    '...cccpkkpccc...',
+    '....ccpkkpcc....',
+    '................'] },
+  { name:'Balık', goal:62, cols:['y','b','r','w'], art:[
+    '................',
+    '................',
+    '.......ccc......',
+    '.....ccccccc.g..',
+    '...cccccccccgg..',
+    '..ccckcccccggg..',
+    '.ccccccccccgggg.',
+    '.ccccccccccggg..',
+    '..cccccccccgg...',
+    '...cccccccc.g...',
+    '.....ccccc......',
+    '.......c........',
+    '................',
+    '....b...b...b...',
+    '................',
+    '................'] }
+];
+
+/* ---------------- durum ---------------- */
+const N = 16;
+let W, H, cell, gridX, gridY, gridSize, launchX, launchY;
+let level = 0, target = [], paint = [], ammo = 0, queue = [], deck = [], matchPct = 0;
+let drag = null, flying = null, splats = [], state = 'aim';
+let maxPull = 200, maxRange = 600;
+
+// sadece hedef resimde geçen renkler — çözülemez bölüm olmasın
+function artColors(art){
+  const set = [];
+  for(const row of art) for(const ch of row)
+    if(ch!=='.' && PAL[ch] && set.indexOf(ch)<0) set.push(ch);
+  return set;
+}
+// balon boyutları: tam kare blokları — yarım kare yok, taşma yok
+const MAXB = 4;        // bir balon en fazla 4×4 kare boyar
+const SPARE = 0.12;    // parça sayısının bu kadarı fazladan 1×1 balon (hata telafisi)
+
+function makeBalloon(cols, shape){
+  const key = cols[(Math.random()*cols.length)|0];
+  return { col: hex2rgb(PAL[key]), w: shape.w, h: shape.h };
+}
+
+// resmi aynı renkli dikdörtgen parçalara böl (açgözlü: her adımda en geniş alan)
+function decompose(art){
+  const used = Array.from({length:N}, () => new Array(N).fill(false));
+  const parts = [];
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const ch = art[y][x];
+    if(ch==='.' || used[y][x]) continue;
+    const free = (px,py) => py<N && px<N && art[py][px]===ch && !used[py][px];
+    let wmax = 0;
+    while(wmax<MAXB && free(x+wmax, y)) wmax++;
+    let best = {w:1,h:1,a:1};
+    for(let w=1; w<=wmax; w++){
+      let h = 0;
+      while(h<MAXB && y+h<N){
+        let ok = true;
+        for(let k=0;k<w;k++) if(!free(x+k, y+h)){ ok=false; break; }
+        if(!ok) break;
+        h++;
+      }
+      if(w*h > best.a) best = {w, h, a:w*h};
+    }
+    for(let j=0;j<best.h;j++) for(let i=0;i<best.w;i++) used[y+j][x+i] = true;
+    parts.push({ x, y, w:best.w, h:best.h, ch });
+  }
+  return parts;
+}
+
+// deste doğrudan resmin parçalarından kurulur → her balonun tam oturduğu bir yer vardır
+function buildDeck(art, cols){
+  const parts = decompose(art);
+  const out = parts.map(p => ({ col: hex2rgb(PAL[p.ch]), w:p.w, h:p.h }));
+  const spare = Math.max(1, Math.round(parts.length * SPARE));
+  for(let i=0;i<spare;i++) out.push(makeBalloon(cols, {w:1,h:1}));
+  for(let i=out.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [out[i],out[j]]=[out[j],out[i]]; }
+  return out;
+}
+
+// bloğun sol-üst kare indeksi (merkez noktadan hizalanır, tuval dışına taşmaz)
+function blockOrigin(cx, cy, b){
+  let ox = Math.round((cx-gridX)/cell - b.w/2);
+  let oy = Math.round((cy-gridY)/cell - b.h/2);
+  ox = Math.max(0, Math.min(N-b.w, ox));
+  oy = Math.max(0, Math.min(N-b.h, oy));
+  return [ox, oy];
+}
+// bu atışın boyayacağı kareler — hepsi tam kaplama
+function splatCells(cx, cy, b){
+  const [ox,oy] = blockOrigin(cx,cy,b), out = [];
+  for(let y=oy;y<oy+b.h;y++) for(let x=ox;x<ox+b.w;x++) out.push({x,y,cov:1});
+  return out;
+}
+
+function loadLevel(i){
+  level = i % LEVELS.length;
+  const L = LEVELS[level];
+  target = []; paint = []; splats = [];
+  for(let y=0;y<N;y++){
+    target.push([]); paint.push([]);
+    for(let x=0;x<N;x++){
+      const ch = L.art[y][x];
+      target[y].push(ch==='.' ? null : hex2rgb(PAL[ch]));
+      paint[y].push(null);   // {c:[r,g,b], w:number}
+    }
+  }
+  L.cols = artColors(L.art);
+  deck = buildDeck(L.art, L.cols);
+  queue = deck.splice(0, 3);
+  ammo = queue.length + deck.length;
+  matchPct = 0; drag = null; flying = null; state = 'aim';
+  $('lvl').textContent = level+1;
+  $('goal').textContent = L.goal;
+  updateHUD();
+  $('msg').style.display = 'none';
+}
+
+function updateHUD(){
+  $('ammo').textContent = ammo;
+  $('ammo').style.color = ammo<=3 ? '#ff6b6b' : ammo<=6 ? '#ffd24a' : '#fff';
+  $('match').textContent = matchPct + '%';
+}
+
+/* ---------------- boyama ---------------- */
+function applySplat(cx, cy, b){
+  const color = b.col;
+  for(const s of splatCells(cx, cy, b)){
+    const cur = paint[s.y][s.x];
+    if(!cur) paint[s.y][s.x] = { c: color.slice(), w: s.cov };
+    else {
+      cur.c = mixPaint(cur.c, cur.w, color, s.cov);
+      cur.w = Math.min(3, cur.w + s.cov);
+    }
+  }
+  computeMatch();
+}
+
+function computeMatch(){
+  let total = 0, score = 0;
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const t = target[y][x], p = paint[y][x];
+    if(t){
+      total++;
+      if(p) score += Math.max(0, 1 - dist2(t,p.c)/170);
+    } else {
+      total += 0.5;
+      if(!p) score += 0.5;                      // boş kalması gereken yeri temiz bırakmak da puan
+      else score += 0.5 * Math.max(0, 1 - p.w/0.6) * 0.3;
+    }
+  }
+  matchPct = Math.round(100*score/total);
+  updateHUD();
+}
+
+/* ---------------- boyut / yerleşim ---------------- */
+function resize(){
+  W = cv.width = window.innerWidth;
+  H = cv.height = window.innerHeight;
+  gridSize = Math.min(W*0.92, H*0.62);
+  cell = gridSize/N;
+  gridX = (W-gridSize)/2;
+  gridY = Math.max(64, H*0.10);
+  launchX = W/2;
+  launchY = gridY + gridSize + Math.min(150, (H-gridY-gridSize)*0.55);
+  // tam germe = tuvalin en uzak köşesine ulaşacak menzil
+  maxPull = Math.min(W, H) * 0.32;
+  maxRange = Math.hypot(gridSize/2 + cell, launchY - gridY + cell);
+}
+window.addEventListener('resize', resize);
+
+/* ---------------- nişan hesabı ---------------- */
+const MIN_PULL = 6;     // bu kadar germede atış sayılır
+// şeklin olabilecek en geniş yarıçapı (dalgalı kenarın tepe noktası)
+function aimPoint(dx, dy, b){
+  // sapan: parmağı geriye çekersin, top ters yöne uçar.
+  // mesafe eğrisel: tam germeye yaklaştıkça hassaslaşır (tuval oraya denk gelir)
+  const pull = Math.hypot(dx,dy);
+  if(pull < 0.001) return [launchX, launchY];
+  const t = Math.min(1, pull/maxPull);
+  const range = maxRange * Math.pow(t, 0.65);
+  let tx = launchX - (dx/pull)*range;
+  let ty = launchY - (dy/pull)*range;
+  // blok kare ızgarasına hizalanır ve tuvalin dışına asla taşmaz
+  const [ox,oy] = blockOrigin(tx, ty, b);
+  return [ gridX + (ox + b.w/2)*cell, gridY + (oy + b.h/2)*cell ];
+}
+
+/* ---------------- girdi ---------------- */
+function pos(e){
+  const t = e.touches ? e.touches[0] : e;
+  const r = cv.getBoundingClientRect();
+  return [t.clientX-r.left, t.clientY-r.top];
+}
+function down(e){
+  if(state!=='aim' || flying || ammo<=0) return;
+  e.preventDefault();
+  const [x,y] = pos(e);
+  drag = { sx:x, sy:y, x:x, y:y };
+}
+function move(e){
+  if(!drag) return;
+  e.preventDefault();
+  const [x,y] = pos(e);
+  drag.x = x; drag.y = y;
+}
+function up(e){
+  if(!drag) return;
+  e.preventDefault();
+  const dx = drag.x-drag.sx, dy = drag.y-drag.sy;
+  const pull = Math.hypot(dx,dy);
+  if(pull > MIN_PULL) shoot(dx,dy);
+  drag = null;
+}
+function shoot(dx,dy){
+  const b = queue.shift();
+  if(deck.length) queue.push(deck.shift());
+  const [tx,ty] = aimPoint(dx,dy,b);
+  ammo--; updateHUD();
+  flying = { b, x:launchX, y:launchY, tx, ty, t:0, dur: 0.42 };
+}
+
+cv.addEventListener('mousedown',down); window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+cv.addEventListener('touchstart',down,{passive:false}); cv.addEventListener('touchmove',move,{passive:false});
+cv.addEventListener('touchend',up,{passive:false}); cv.addEventListener('touchcancel',up,{passive:false});
+
+/* ---------------- çizim ---------------- */
+function rgbs(c,a){ return 'rgba('+c[0]+','+c[1]+','+c[2]+','+(a===undefined?1:a)+')'; }
+
+function drawGrid(){
+  // tuval
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(gridX, gridY, gridSize, gridSize);
+
+  // silik hedef resim
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const t = target[y][x];
+    if(!t) continue;
+    ctx.fillStyle = rgbs(t, 0.20);
+    ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+  }
+  // atılmış boya
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const p = paint[y][x];
+    if(!p) continue;
+    ctx.fillStyle = rgbs(p.c, Math.min(1, 0.55 + p.w*0.35));
+    ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+  }
+  // grid çizgileri
+  ctx.strokeStyle = 'rgba(0,0,0,.09)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for(let i=0;i<=N;i++){
+    ctx.moveTo(gridX+i*cell+.5, gridY); ctx.lineTo(gridX+i*cell+.5, gridY+gridSize);
+    ctx.moveTo(gridX, gridY+i*cell+.5); ctx.lineTo(gridX+gridSize, gridY+i*cell+.5);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
+  ctx.strokeRect(gridX-1, gridY-1, gridSize+2, gridSize+2);
+}
+
+function drawBalloon(x,y,b,scale){
+  const sc = scale||1;
+  const r = 11*Math.sqrt(b.w*b.h)*sc;
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.beginPath();
+  ctx.moveTo(0, -r*1.15);
+  ctx.bezierCurveTo(r*1.15,-r*1.15, r*1.05, r*0.75, 0, r*1.2);
+  ctx.bezierCurveTo(-r*1.05, r*0.75, -r*1.15,-r*1.15, 0,-r*1.15);
+  ctx.fillStyle = rgbs(b.col);
+  ctx.fill();
+  ctx.beginPath(); ctx.ellipse(-r*0.32,-r*0.35, r*0.28, r*0.4, -0.5, 0, 6.3);
+  ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.fill();
+  // kaç kare boyayacağı balonun üstünde yazar
+  const lum = (b.col[0]*0.3+b.col[1]*0.6+b.col[2]*0.1);
+  ctx.fillStyle = lum>150 ? 'rgba(0,0,0,.65)' : 'rgba(255,255,255,.9)';
+  ctx.font = 'bold '+Math.max(8, r*0.62)+'px system-ui';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(b.w+'×'+b.h, 0, r*0.12);
+  ctx.restore();
+}
+
+function drawPreview(){
+  if(!drag) return;
+  const dx = drag.x-drag.sx, dy = drag.y-drag.sy;
+  if(Math.hypot(dx,dy) < MIN_PULL) return;
+  const b = queue[0];
+  if(!b) return;
+  const [tx,ty] = aimPoint(dx,dy,b);
+
+  // yörünge noktaları
+  ctx.save();
+  for(let i=1;i<=9;i++){
+    const t=i/10;
+    const x = launchX + (tx-launchX)*t;
+    const y = launchY + (ty-launchY)*t - Math.sin(t*Math.PI)*70;
+    ctx.beginPath(); ctx.arc(x,y, 3.2-t*1.4, 0, 6.3);
+    ctx.fillStyle = rgbs(b.col, 0.25+t*0.45); ctx.fill();
+  }
+  // boyanacak kareler — atışta boyanacak olanın birebir aynısı
+  for(const s of splatCells(tx, ty, b)){
+    ctx.fillStyle = rgbs(b.col, .45);
+    ctx.fillRect(gridX+s.x*cell, gridY+s.y*cell, cell, cell);
+  }
+  // blok çerçevesi
+  const [ox,oy] = blockOrigin(tx,ty,b);
+  ctx.lineWidth = 2.5; ctx.setLineDash([6,5]);
+  ctx.strokeStyle = rgbs(b.col, .95);
+  ctx.strokeRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
+  ctx.setLineDash([]);
+  // germe lastiği
+  ctx.beginPath(); ctx.moveTo(launchX,launchY);
+  ctx.lineTo(launchX-dx*0.5, launchY-dy*0.5);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+function drawQueue(){
+  const y = launchY;
+  drawBalloon(launchX, y, queue[0], 1.25);
+  // sıradaki iki balon
+  const bx = W/2 + Math.min(150, gridSize*0.38);
+  ctx.save();
+  ctx.font = '11px system-ui'; ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.textAlign='center';
+  ctx.fillText('SIRADAKİ', bx+26, y-32);
+  ctx.restore();
+  if(queue[1]) drawBalloon(bx, y, queue[1], 0.8);
+  if(queue[2]) drawBalloon(bx+52, y, queue[2], 0.6);
+  // fırlatma kaidesi
+  ctx.beginPath(); ctx.ellipse(launchX, launchY+26, 34, 9, 0,0,6.3);
+  ctx.fillStyle='rgba(255,255,255,.12)'; ctx.fill();
+}
+
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.05, (now-last)/1000); last = now;
+  ctx.clearRect(0,0,W,H);
+
+  // arka plan
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#252a33'); g.addColorStop(1,'#14161b');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  drawGrid();
+
+  // uçan balon
+  if(flying){
+    flying.t += dt/flying.dur;
+    const t = Math.min(1, flying.t);
+    const x = flying.x + (flying.tx-flying.x)*t;
+    const y = flying.y + (flying.ty-flying.y)*t - Math.sin(t*Math.PI)*90;
+    drawBalloon(x, y, flying.b, 1 + t*0.5);
+    if(t>=1){
+      applySplat(flying.tx, flying.ty, flying.b);
+      splats.push({x:flying.tx, y:flying.ty, c:flying.b.col, r:Math.max(flying.b.w, flying.b.h)*cell*0.5, t:0});
+      flying = null;
+      if(ammo<=0) setTimeout(finish, 500);
+    }
+  }
+
+  // sıçrama efekti
+  for(let i=splats.length-1;i>=0;i--){
+    const s = splats[i]; s.t += dt*3;
+    if(s.t>=1){ splats.splice(i,1); continue; }
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r*(1+s.t*0.8), 0, 6.3);
+    ctx.strokeStyle = rgbs(s.c, (1-s.t)*0.8); ctx.lineWidth = 4*(1-s.t); ctx.stroke();
+  }
+
+  if(state==='aim' && !flying && ammo>0){ drawQueue(); drawPreview(); }
+
+  requestAnimationFrame(loop);
+}
+
+function finish(){
+  const L = LEVELS[level];
+  const win = matchPct >= L.goal;
+  state = 'over';
+  $('mt').textContent = win ? 'Harika! 🎨' : 'Olmadı…';
+  $('ms').textContent = L.name + ' — eşleşme %' + matchPct + ' (hedef %' + L.goal + ')';
+  $('mb').textContent = win ? 'Sonraki Bölüm' : 'Tekrar Dene';
+  $('mb').onclick = () => loadLevel(win ? level+1 : level);
+  $('msg').style.display = 'flex';
+}
+
+// test: her parçayı doğru yerine koyarsa oyun %100'e ulaşıyor mu?
+function solve(){
+  for(const p of decompose(LEVELS[level].art))
+    for(let j=0;j<p.h;j++) for(let i=0;i<p.w;i++)
+      paint[p.y+j][p.x+i] = { c: hex2rgb(PAL[p.ch]), w: 1 };
+  computeMatch();
+  return matchPct;
+}
+window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[level].art) };
+resize();
+loadLevel(0);
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
