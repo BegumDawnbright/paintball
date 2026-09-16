@@ -31,6 +31,9 @@
   #snd { position:absolute; right:12px; bottom:12px; width:42px; height:42px; border:0; border-radius:50%;
          background:#ffffff1a; color:#fff; font-size:19px; cursor:pointer; line-height:42px; }
   #snd.off { opacity:.45; }
+  #undo { position:absolute; left:12px; bottom:12px; height:42px; padding:0 16px; border:0; border-radius:21px;
+          background:#ffffff1a; color:#fff; font-size:15px; font-weight:700; cursor:pointer; }
+  #undo:disabled { opacity:.3; cursor:default; }
   #msg button { pointer-events:auto; padding:12px 28px; font-size:16px; font-weight:700; border:0; border-radius:30px;
                 background:#ffd24a; color:#222; cursor:pointer; }
 </style>
@@ -44,6 +47,7 @@
       <span style="opacity:.7;font-weight:500">Hedef: <span id="goal">70</span>%</span></div>
   </div>
   <button id="snd" title="Ses">🔊</button>
+  <button id="undo" title="Geri al">↩ <span id="ul">3</span></button>
   <div id="start">
     <h1>PAINTBALL</h1>
     <p>Nasıl oynamak istersin?</p>
@@ -215,7 +219,7 @@ function dist2(a,b){ const dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2]; return Math.s
 /* ---------------- bölümler ---------------- */
 const PAL = { r:'#e5384a', o:'#f08a2c', y:'#f5cf3d', g:'#4bb85f', b:'#3a7fd5', p:'#8b53c9', k:'#3b3f4a', w:'#ffffff', c:'#45c3c9', m:'#e06aa8', n:'#8a5a2b' };
 const LEVELS = [
-  { name:'Elma', goal:70, art:[
+  { name:'Elma', goal:95, art:[
     '................',
     '.......nn.......',
     '.......nn.gg....',
@@ -232,7 +236,7 @@ const LEVELS = [
     '...rrrrrrrrrr...',
     '.....rrrrrr.....',
     '................'] },
-  { name:'Çiçek', goal:66, cols:['r','y','b','g'], art:[
+  { name:'Çiçek', goal:95, cols:['r','y','b','g'], art:[
     '................',
     '.....mmm........',
     '....mmmmm.......',
@@ -249,7 +253,7 @@ const LEVELS = [
     '.....gg.........',
     '......g.........',
     '................'] },
-  { name:'Gün Batımı', goal:64, cols:['r','y','b','p'], art:[
+  { name:'Gün Batımı', goal:95, cols:['r','y','b','p'], art:[
     'bbbbbbbbbbbbbbbb',
     'bbbbbbbbbbbbbbbb',
     'pppppppppppppppp',
@@ -266,7 +270,7 @@ const LEVELS = [
     'kkkkkkkkkkkkkkkk',
     'kkkkkkkkkkkkkkkk',
     'kkkkkkkkkkkkkkkk'] },
-  { name:'Kelebek', goal:58, art:[
+  { name:'Kelebek', goal:95, art:[
     '................',
     '..ppp..kk..ppp..',
     '.pmmmp.kk.pmmmp.',
@@ -283,7 +287,7 @@ const LEVELS = [
     '...cccpkkpccc...',
     '....ccpkkpcc....',
     '................'] },
-  { name:'Balık', goal:62, cols:['y','b','r','w'], art:[
+  { name:'Balık', goal:95, cols:['y','b','r','w'], art:[
     '................',
     '................',
     '.......ccc......',
@@ -311,6 +315,25 @@ let mode = 'paint';          // 'paint' = sapanla balon, 'block' = yapışkan el
 let hand = null;             // uzayan el animasyonu
 let bits = [], shake = 0;   // uçuşan boya damlaları / balon parçaları, ekran sarsıntısı
 let shocks = [];            // yerleştirme sarsıntısı: küpler dalga halinde titreşir
+let history = [], undoLeft = 3;   // geri alma: yanlış konan blok bölümü çöpe atmasın
+
+function undo(){
+  if(!undoLeft || !history.length || flying || hand || state !== 'aim') return;
+  const rec = history.pop();
+  for(const s of rec.snap)
+    paint[s.y][s.x] = s.prev ? { c:s.prev.c, w:s.prev.w, pop:0 } : null;
+  queue.unshift(rec.b);                       // blok sıranın başına döner
+  while(queue.length > 3) deck.unshift(queue.pop());
+  ammo++; undoLeft--;
+  computeMatch();
+  sfx.bump();
+  refreshUndo();
+}
+function refreshUndo(){
+  $('ul').textContent = undoLeft;
+  $('undo').disabled = !undoLeft || !history.length || state !== 'aim';
+  $('undo').style.display = state === 'menu' ? 'none' : 'block';
+}
 
 // yerleştirme noktasından yayılan jöle dalgası: yakındaki küp daha şiddetli sallanır
 function jiggle(cx, cy){
@@ -474,6 +497,7 @@ function loadLevel(i){
   queue = deck.splice(0, 3);
   ammo = queue.length + deck.length;
   matchPct = 0; drag = null; flying = null; hand = null; bits = []; shocks = []; shake = 0;
+  history = []; undoLeft = 3; refreshUndo();
   if(state !== 'menu') state = 'aim';
   $('lvl').textContent = level+1;
   $('goal').textContent = L.goal;
@@ -490,7 +514,14 @@ function updateHUD(){
 /* ---------------- boyama ---------------- */
 function applySplat(cx, cy, b){
   const color = b.col;
-  for(const s of splatCells(cx, cy, b)){
+  const cells = splatCells(cx, cy, b);
+  // geri alma için etkilenen karelerin eski hali saklanır
+  history.push({ b, snap: cells.map(s => {
+    const p = paint[s.y][s.x];
+    return { x:s.x, y:s.y, prev: p ? { c:p.c.slice(), w:p.w } : null };
+  })});
+  if(history.length > 24) history.shift();
+  for(const s of cells){
     const cur = paint[s.y][s.x];
     if(!cur) paint[s.y][s.x] = { c: color.slice(), w: s.cov, pop: 1 };
     else {
@@ -513,6 +544,7 @@ function computeMatch(){
   }
   matchPct = Math.round(100*score/total);
   updateHUD();
+  refreshUndo();
 }
 
 /* ---------------- boyut / yerleşim ---------------- */
@@ -985,6 +1017,7 @@ function finish(){
   const L = LEVELS[level];
   const win = matchPct >= L.goal;
   state = 'over';
+  refreshUndo();
   win ? sfx.win() : sfx.lose();
   $('mt').textContent = win ? 'Harika! 🎨' : 'Olmadı…';
   $('ms').textContent = L.name + ' — eşleşme %' + matchPct + ' (hedef %' + L.goal + ')';
@@ -1024,6 +1057,8 @@ $('mm').addEventListener('click', () => {
   $('start').style.display = 'flex';
   state = 'menu';
 });
+
+$('undo').addEventListener('click', e => { e.stopPropagation(); undo(); });
 
 $('snd').addEventListener('click', e => {
   e.stopPropagation();
