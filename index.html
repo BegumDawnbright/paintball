@@ -16,6 +16,18 @@
          background:#0d0f13e0; color:#fff; text-align:center; gap:14px; }
   #msg h1 { font-size:30px; }
   #msg p { font-size:15px; opacity:.8; }
+  #start { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+           gap:10px; background:#12141a; color:#fff; text-align:center; padding:20px; }
+  #start h1 { font-size:34px; letter-spacing:3px; }
+  #start p { font-size:14px; opacity:.6; margin-bottom:14px; }
+  .modes { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; }
+  .modes button { width:150px; padding:18px 12px; border:0; border-radius:16px; cursor:pointer;
+                  display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .modes b { font-size:19px; letter-spacing:2px; }
+  .modes span { font-size:11px; opacity:.75; line-height:1.35; }
+  #mPaint { background:#e5384a; color:#fff; }
+  #mBlock { background:#45c3c9; color:#10343a; }
+  #mm { background:none; color:#fff; opacity:.55; font-size:13px; font-weight:500; padding:6px 14px; }
   #snd { position:absolute; right:12px; bottom:12px; width:42px; height:42px; border:0; border-radius:50%;
          background:#ffffff1a; color:#fff; font-size:19px; cursor:pointer; line-height:42px; }
   #snd.off { opacity:.45; }
@@ -32,7 +44,15 @@
       <span style="opacity:.7;font-weight:500">Hedef: <span id="goal">70</span>%</span></div>
   </div>
   <button id="snd" title="Ses">🔊</button>
-  <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button></div>
+  <div id="start">
+    <h1>PAINTBALL</h1>
+    <p>Nasıl oynamak istersin?</p>
+    <div class="modes">
+      <button id="mPaint"><b>PAINT</b><span>Boya balonunu sapanla fırlat</span></button>
+      <button id="mBlock"><b>BLOCK</b><span>Yapışkan el bloğu yerine koysun</span></button>
+    </div>
+  </div>
+  <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button><button id="mm" class="ghost">Mod değiştir</button></div>
 </div>
 <script>
 (function(){
@@ -92,7 +112,10 @@ const sfx = {
   mix(){ tone(660, 0.09, 0.05, 'sine'); },                       // üst üste boya (renk karıştı)
   win(){ [523,659,784,1047].forEach((f,i)=> tone(f, 0.30, 0.10, 'triangle', i*0.11)); },
   lose(){ [392,330,262].forEach((f,i)=> tone(f, 0.34, 0.09, 'sine', i*0.14)); },
-  empty(){ tone(150, 0.12, 0.06, 'square'); }                    // balon bitti
+  empty(){ tone(150, 0.12, 0.06, 'square'); },                   // balon bitti
+  reach(){ burst(0.24, 300, 1400, 0.07, 2.0); },                 // el uzanırken kayma sesi
+  stick(){ burst(0.10, 1800, 500, 0.20, 1.6);                    // blok yerine yapışır
+           tone(180, 0.09, 0.10, 'square'); }
 };
 
 /* ---------------- renk yardımcıları ---------------- */
@@ -224,7 +247,9 @@ const LEVELS = [
 const N = 16;
 let W, H, cell, gridX, gridY, gridSize, launchX, launchY;
 let level = 0, target = [], paint = [], ammo = 0, queue = [], deck = [], matchPct = 0;
-let drag = null, flying = null, splats = [], state = 'aim';
+let drag = null, flying = null, splats = [], state = 'menu';
+let mode = 'paint';          // 'paint' = sapanla balon, 'block' = yapışkan el blok koyar
+let hand = null;             // uzayan el animasyonu
 let bits = [], shake = 0;   // uçuşan boya damlaları / balon parçaları, ekran sarsıntısı
 
 // çarpma anında: balon kaybolur, yerine boya damlaları ve lastik parçaları saçılır
@@ -359,7 +384,8 @@ function loadLevel(i){
   deck = buildDeck(L.art, L.cols);
   queue = deck.splice(0, 3);
   ammo = queue.length + deck.length;
-  matchPct = 0; drag = null; flying = null; state = 'aim';
+  matchPct = 0; drag = null; flying = null; hand = null; bits = []; shake = 0;
+  if(state !== 'menu') state = 'aim';
   $('lvl').textContent = level+1;
   $('goal').textContent = L.goal;
   updateHUD();
@@ -445,7 +471,7 @@ function pos(e){
   return [t.clientX-r.left, t.clientY-r.top];
 }
 function down(e){
-  if(state!=='aim' || flying || ammo<=0) return;
+  if(state!=='aim' || flying || hand || ammo<=0) return;
   e.preventDefault();
   const [x,y] = pos(e);
   drag = { sx:x, sy:y, x:x, y:y };
@@ -460,10 +486,26 @@ function move(e){
 function up(e){
   if(!drag) return;
   e.preventDefault();
+  if(mode === 'block'){
+    // blok modunda dokunulan yere konur; tuvalden çok uzağa basıldıysa iptal
+    if(queue[0] && drag.y < gridY + gridSize + cell*2) place(drag.x, drag.y);
+    drag = null;
+    return;
+  }
   const dx = drag.x-drag.sx, dy = drag.y-drag.sy;
   const pull = Math.hypot(dx,dy);
   if(pull > MIN_PULL) shoot(dx,dy);
   drag = null;
+}
+
+// blok modu: yapışkan el uzanıp bloğu yerine koyar
+function place(px, py){
+  const b = queue.shift();
+  if(deck.length) queue.push(deck.shift());
+  const [ox,oy] = blockOrigin(px, py, b);
+  ammo--; updateHUD();
+  sfx.reach();
+  hand = { b, tx: gridX+(ox+b.w/2)*cell, ty: gridY+(oy+b.h/2)*cell, t:0, phase:'out' };
 }
 function shoot(dx,dy){
   const b = queue.shift();
@@ -553,12 +595,86 @@ function drawBalloon(x,y,b,scale,ang,st){
   ctx.restore();
 }
 
+// tuvale konacak blok — balonun blok modundaki karşılığı
+function drawBlockPiece(x, y, b, scale){
+  const s = scale||1, w = b.w*cell*s, h = b.h*cell*s;
+  ctx.save();
+  ctx.translate(x-w/2, y-h/2);
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  ctx.fillRect(3, 4, w, h);                       // gölge
+  ctx.fillStyle = rgbs(b.col);
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,.22)';        // üst kenar ışığı
+  ctx.fillRect(0, 0, w, Math.max(2, h*0.14));
+  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w-2, h-2);
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 1;
+  for(let i=1;i<b.w;i++){ ctx.beginPath(); ctx.moveTo(i*cell*s,0); ctx.lineTo(i*cell*s,h); ctx.stroke(); }
+  for(let j=1;j<b.h;j++){ ctx.beginPath(); ctx.moveTo(0,j*cell*s); ctx.lineTo(w,j*cell*s); ctx.stroke(); }
+  const lum = (b.col[0]*0.3+b.col[1]*0.6+b.col[2]*0.1);
+  ctx.fillStyle = lum>150 ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.85)';
+  ctx.font = 'bold '+Math.max(9, Math.min(w,h)*0.42)+'px system-ui';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(b.w+'×'+b.h, w/2, h/2);
+  ctx.restore();
+}
+
+// uzayan yapışkan el: kol + tutucu, ucunda bloğu taşır
+function drawHand(){
+  if(!hand) return;
+  const e = hand.phase==='out' ? 1-Math.pow(1-hand.t, 3) : hand.t;   // gidişte yavaşlayarak varır
+  const hx = launchX + (hand.tx-launchX)*e;
+  const hy = launchY + (hand.ty-launchY)*e;
+  const ang = Math.atan2(hy-launchY, hx-launchX);
+  const len = Math.hypot(hx-launchX, hy-launchY);
+  ctx.save();
+  ctx.translate(launchX, launchY); ctx.rotate(ang);
+  // kol — uzadıkça incelir (lastik hissi)
+  const th = Math.max(7, 18 - len*0.013);
+  const gr = ctx.createLinearGradient(0,-th/2,0,th/2);
+  gr.addColorStop(0,'#ffe3c8'); gr.addColorStop(1,'#e0a878');
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(0,-th/2,len,th,th/2) : ctx.rect(0,-th/2,len,th);
+  ctx.fillStyle = gr; ctx.fill();
+  ctx.strokeStyle = 'rgba(60,30,10,.35)'; ctx.lineWidth = 2; ctx.stroke();
+  // tutucu el
+  ctx.translate(len, 0);
+  ctx.beginPath(); ctx.arc(0,0, th*1.3, 0, 6.283);
+  ctx.fillStyle = '#ffe3c8'; ctx.fill();
+  ctx.strokeStyle = 'rgba(60,30,10,.35)'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(-th*0.3,-th*0.35, th*0.45, 0, 6.283);
+  ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fill();
+  ctx.restore();
+  if(hand.phase==='out') drawBlockPiece(hx, hy, hand.b, 1);   // blok elin ucunda
+}
+
 function drawPreview(){
   if(!drag) return;
-  const dx = drag.x-drag.sx, dy = drag.y-drag.sy;
-  if(Math.hypot(dx,dy) < MIN_PULL) return;
   const b = queue[0];
   if(!b) return;
+
+  if(mode === 'block'){
+    if(drag.y > gridY + gridSize + cell*2) return;
+    const [ox,oy] = blockOrigin(drag.x, drag.y, b);
+    const tx = gridX+(ox+b.w/2)*cell, ty = gridY+(oy+b.h/2)*cell;
+    ctx.save();
+    ctx.setLineDash([5,5]); ctx.lineWidth = 2;        // elin uzanacağı yol
+    ctx.strokeStyle = 'rgba(255,255,255,.22)';
+    ctx.beginPath(); ctx.moveTo(launchX,launchY); ctx.lineTo(tx,ty); ctx.stroke();
+    ctx.setLineDash([]);
+    for(const s of splatCells(tx,ty,b)){
+      ctx.fillStyle = rgbs(b.col, .45);
+      ctx.fillRect(gridX+s.x*cell, gridY+s.y*cell, cell, cell);
+    }
+    ctx.lineWidth = 2.5; ctx.setLineDash([6,5]);
+    ctx.strokeStyle = rgbs(b.col, .95);
+    ctx.strokeRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
+    ctx.restore();
+    return;
+  }
+
+  const dx = drag.x-drag.sx, dy = drag.y-drag.sy;
+  if(Math.hypot(dx,dy) < MIN_PULL) return;
   const [tx,ty] = aimPoint(dx,dy,b);
 
   // yörünge noktaları
@@ -590,6 +706,17 @@ function drawPreview(){
 
 function drawQueue(){
   const y = launchY;
+  if(mode === 'block'){
+    drawBlockPiece(launchX, y, queue[0], 1);
+    const b3 = W - 34 - cell*0.6, bx = b3 - cell*2.1;
+    ctx.save();
+    ctx.font = '11px system-ui'; ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.textAlign='center';
+    ctx.fillText('SIRADAKİ', (bx+b3)/2, y - cell*1.5);
+    ctx.restore();
+    if(queue[1]) drawBlockPiece(bx, y, queue[1], 0.42);
+    if(queue[2]) drawBlockPiece(b3, y, queue[2], 0.32);
+    return;
+  }
   // gerdikçe balon lastikte geri kayar ve atış yönünde uzun-ince forma girer
   let bxc = launchX, byc = y, ang, st = 1;
   if(drag){
@@ -671,7 +798,31 @@ function loop(now){
     ctx.strokeStyle = rgbs(s.c, (1-s.t)*0.8); ctx.lineWidth = 4*(1-s.t); ctx.stroke();
   }
 
-  if(state==='aim' && !flying && ammo>0){ drawQueue(); drawPreview(); }
+  // uzayan el (blok modu)
+  if(hand){
+    if(hand.phase === 'out'){
+      hand.t += dt/0.30;
+      if(hand.t >= 1){
+        hand.t = 1;
+        const b = hand.b;
+        const over = splatCells(hand.tx, hand.ty, b).filter(s => paint[s.y][s.x]).length;
+        sfx.stick();
+        if(over) sfx.mix();
+        applySplat(hand.tx, hand.ty, b);
+        shake = Math.min(6, 1.5 + b.w*b.h*0.25);
+        hand.phase = 'back';
+      }
+    } else {
+      hand.t -= dt/0.22;
+      if(hand.t <= 0){
+        hand = null;
+        if(ammo <= 0) setTimeout(finish, 400);
+      }
+    }
+    drawHand();
+  }
+
+  if(state==='aim' && !flying && !hand && ammo>0){ drawQueue(); drawPreview(); }
 
   drawBits();
   ctx.restore();
@@ -704,6 +855,21 @@ window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[le
               fire: () => up({ preventDefault(){} }),
               bits: () => bits.length,
               info: () => ({ H, launchY, altBosluk: Math.round(H-launchY), maxPull: Math.round(maxPull) }) };
+function startGame(m){
+  mode = m;
+  $('start').style.display = 'none';
+  state = 'aim';
+  audio();                       // ilk dokunuşta ses açılır (mobil kısıtı)
+  loadLevel(0);
+}
+$('mPaint').addEventListener('click', () => startGame('paint'));
+$('mBlock').addEventListener('click', () => startGame('block'));
+$('mm').addEventListener('click', () => {
+  $('msg').style.display = 'none';
+  $('start').style.display = 'flex';
+  state = 'menu';
+});
+
 $('snd').addEventListener('click', e => {
   e.stopPropagation();
   muted = !muted;
