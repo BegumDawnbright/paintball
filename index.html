@@ -308,6 +308,19 @@ let drag = null, flying = null, splats = [], state = 'menu';
 let mode = 'paint';          // 'paint' = sapanla balon, 'block' = yapışkan el blok koyar
 let hand = null;             // uzayan el animasyonu
 let bits = [], shake = 0;   // uçuşan boya damlaları / balon parçaları, ekran sarsıntısı
+let shocks = [];            // yerleştirme sarsıntısı: küpler dalga halinde titreşir
+
+// yerleştirme noktasından yayılan jöle dalgası: yakındaki küp daha şiddetli sallanır
+function jiggle(cx, cy){
+  let w = 0;
+  for(const s of shocks){
+    const d = Math.hypot(cx-s.x, cy-s.y);
+    const ph = s.t - d/(cell*24);             // dalga dışa doğru gecikmeyle ulaşır
+    if(ph <= 0) continue;
+    w += Math.sin(ph*26) * Math.exp(-d/(cell*5)) * Math.exp(-ph*4.5) * 0.38;
+  }
+  return w;
+}
 
 // çarpma anında: balon kaybolur, yerine boya damlaları ve lastik parçaları saçılır
 function spawnBurst(x, y, col, area){
@@ -441,7 +454,7 @@ function loadLevel(i){
   deck = buildDeck(L.art, L.cols);
   queue = deck.splice(0, 3);
   ammo = queue.length + deck.length;
-  matchPct = 0; drag = null; flying = null; hand = null; bits = []; shake = 0;
+  matchPct = 0; drag = null; flying = null; hand = null; bits = []; shocks = []; shake = 0;
   if(state !== 'menu') state = 'aim';
   $('lvl').textContent = level+1;
   $('goal').textContent = L.goal;
@@ -605,9 +618,15 @@ function drawGrid(){
       else { ctx.fillStyle = rgbs(p.c, Math.min(1, 0.55 + p.w*0.35));
              ctx.fillRect(px0, py0, cell, cell); }
     };
-    if(p.pop > 0){                       // yeni konan kare şişip oturur
-      const s = 1 + 0.45*p.pop, cx0 = px0+cell/2, cy0 = py0+cell/2;
-      ctx.save(); ctx.translate(cx0,cy0); ctx.scale(s,s); ctx.translate(-cx0,-cy0);
+    const base = p.pop > 0 ? 1 + 0.45*p.pop : 1;
+    const w = (mode === 'block' && shocks.length) ? jiggle(px0+cell/2, py0+cell/2) : 0;
+    if(base !== 1 || w !== 0){
+      // jöle: dikey uzarken yatay incelir, alt kenar yere yapışık kalır
+      const cx0 = px0+cell/2, by = py0+cell;
+      ctx.save();
+      ctx.translate(cx0, by);
+      ctx.scale(base*(1-w*0.7), base*(1+w));
+      ctx.translate(-cx0, -by);
       put();
       ctx.restore();
     } else put();
@@ -816,6 +835,10 @@ function loop(now){
   ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
 
   updateBits(dt);
+  for(let i=shocks.length-1;i>=0;i--){          // sarsıntı dalgası ilerler ve söner
+    shocks[i].t += dt;
+    if(shocks[i].t > 1.4) shocks.splice(i,1);
+  }
   for(let y=0;y<N;y++) for(let x=0;x<N;x++){     // kare pop'unu söndür
     const p = paint[y][x];
     if(p && p.pop > 0) p.pop = Math.max(0, p.pop - dt*5);
@@ -870,6 +893,8 @@ function loop(now){
         sfx.stick();
         if(over) sfx.mix();
         applySplat(hand.tx, hand.ty, b);
+        shocks.push({ x: hand.tx, y: hand.ty, t: 0 });
+        if(shocks.length > 3) shocks.shift();
         shake = Math.min(6, 1.5 + b.w*b.h*0.25);
         hand.phase = 'back';
       }
@@ -915,6 +940,10 @@ window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[le
               aim: (dx,dy) => { drag = { sx:launchX, sy:launchY, x:launchX+dx, y:launchY+dy }; },
               fire: () => up({ preventDefault(){} }),
               bits: () => bits.length,
+              mix: (a,wa,b,wb) => mixPaint(a,wa,b,wb).map(v=>Math.round(v)),
+              cellAt: (x,y) => paint[y][x] && { renk: paint[y][x].c.map(v=>Math.round(v)), kat: +paint[y][x].w.toFixed(2) },
+              wave: (dx,dy) => { const s = shocks[shocks.length-1];
+                                 return s ? jiggle(s.x+dx*cell, s.y+dy*cell) : 0; },
               info: () => ({ H, launchY, altBosluk: Math.round(H-launchY), maxPull: Math.round(maxPull) }) };
 function startGame(m){
   mode = m;
