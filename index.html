@@ -147,7 +147,7 @@ function mixPaint(a, wa, b, wb){
   }
   const s = A[1]*(1-t) + B[1]*t;
   let l = A[2]*(1-t) + B[2]*t;
-  l *= 0.90;                       // katman biriktikçe koyulaşma (boya hissi)
+  l *= 0.78;                       // katman biriktikçe belirgin koyulaşma (boya/jöle hissi)
   l = Math.max(0.05, l);
   return hsl2rgb(h, Math.min(1,s*1.05), l);
 }
