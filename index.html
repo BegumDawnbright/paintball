@@ -27,7 +27,8 @@
   .modes span { font-size:11px; opacity:.75; line-height:1.35; }
   #mPaint { background:#e5384a; color:#fff; }
   #mBlock { background:#45c3c9; color:#10343a; }
-  #mm { background:none; color:#fff; opacity:.55; font-size:13px; font-weight:500; padding:6px 14px; }
+  #msg .ghost { background:none; color:#fff; opacity:.6; font-size:14px; font-weight:600; padding:7px 16px; }
+  #msg .ghost:hover { opacity:.9; }
   #snd { position:absolute; right:12px; bottom:12px; width:42px; height:42px; border:0; border-radius:50%;
          background:#ffffff1a; color:#fff; font-size:19px; cursor:pointer; line-height:42px; }
   #snd.off { opacity:.45; }
@@ -56,7 +57,9 @@
       <button id="mBlock"><b>BLOCK</b><span>Yapışkan el bloğu yerine koysun</span></button>
     </div>
   </div>
-  <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button><button id="mm" class="ghost">Mod değiştir</button></div>
+  <div id="msg"><h1 id="mt"></h1><p id="ms"></p><button id="mb"></button>
+    <button id="mr" class="ghost">↻ Tekrar oyna</button>
+    <button id="mm" class="ghost">Mod değiştir</button></div>
 </div>
 <script>
 (function(){
@@ -1041,10 +1044,14 @@ function finish(){
   state = 'over';
   refreshUndo();
   win ? sfx.win() : sfx.lose();
-  $('mt').textContent = win ? 'Harika! 🎨' : 'Olmadı…';
-  $('ms').textContent = L.name + ' — eşleşme %' + matchPct + ' (hedef %' + L.goal + ')';
+  $('mt').textContent = matchPct >= 100 ? 'Kusursuz! 💯' : win ? 'Harika! 🎨' : 'Olmadı…';
+  $('ms').textContent = L.name + ' — eşleşme %' + matchPct + ' (hedef %' + L.goal + ')'
+                      + (win && matchPct < 100 ? ' · %100 için tekrar deneyebilirsin' : '');
   $('mb').textContent = win ? 'Sonraki Bölüm' : 'Tekrar Dene';
   $('mb').onclick = () => loadLevel(win ? level+1 : level);
+  // kazansa bile aynı bölümü tekrar oynayabilsin (%100 peşindekiler için)
+  $('mr').style.display = win && matchPct < 100 ? 'block' : 'none';
+  $('mr').onclick = () => loadLevel(level);
   $('msg').style.display = 'flex';
 }
 
@@ -1056,7 +1063,7 @@ function solve(){
   computeMatch();
   return matchPct;
 }
-window.PB = { loadLevel, solve, levels: LEVELS, parts: () => decompose(LEVELS[level].art),
+window.PB = { loadLevel, solve, finish, levels: LEVELS, parts: () => decompose(LEVELS[level].art),
               aim: (dx,dy) => { drag = { sx:launchX, sy:launchY, x:launchX+dx, y:launchY+dy }; },
               fire: () => up({ preventDefault(){} }),
               bits: () => bits.length,
