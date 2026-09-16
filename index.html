@@ -434,12 +434,25 @@ function blockOrigin(cx, cy, b, clamp){
   oy = Math.max(0, Math.min(N-b.h, oy));
   return [ox, oy];
 }
-// blok duvarların içine sığıyor mu?
-function fits(ox, oy, b){ return ox>=0 && oy>=0 && ox+b.w<=N && oy+b.h<=N; }
+// oyun alanı = resmin silüeti; dışarısı duvar
+function playable(x, y){ return x>=0 && y>=0 && x<N && y<N && target[y] && !!target[y][x]; }
+function fits(ox, oy, b){
+  if(ox<0 || oy<0 || ox+b.w>N || oy+b.h>N) return false;
+  for(let j=0;j<b.h;j++) for(let i=0;i<b.w;i++) if(!playable(ox+i, oy+j)) return false;
+  return true;
+}
+// oynanabilir alanın yolu (duvar kesiği ve kırpma için)
+let areaPath = null;
+function buildAreaPath(){
+  areaPath = new Path2D();
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++)
+    if(playable(x,y)) areaPath.rect(gridX+x*cell, gridY+y*cell, cell, cell);
+}
 // bu atışın boyayacağı kareler — hepsi tam kaplama
 function splatCells(cx, cy, b){
   const [ox,oy] = blockOrigin(cx,cy,b), out = [];
-  for(let y=oy;y<oy+b.h;y++) for(let x=ox;x<ox+b.w;x++) out.push({x,y,cov:1});
+  for(let y=oy;y<oy+b.h;y++) for(let x=ox;x<ox+b.w;x++)
+    if(playable(x,y)) out.push({x,y,cov:1});     // duvara taşan kısım boyanmaz
   return out;
 }
 
@@ -455,6 +468,7 @@ function loadLevel(i){
       paint[y].push(null);   // {c:[r,g,b], w:number}
     }
   }
+  buildAreaPath();
   L.cols = artColors(L.art);
   deck = buildDeck(L.art, L.cols);
   queue = deck.splice(0, 3);
@@ -491,15 +505,11 @@ function applySplat(cx, cy, b){
 function computeMatch(){
   let total = 0, score = 0;
   for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    // duvar hücrelerine boya gidemediği için sadece oyun alanı puanlanır
     const t = target[y][x], p = paint[y][x];
-    if(t){
-      total++;
-      if(p) score += Math.max(0, 1 - dist2(t,p.c)/170);
-    } else {
-      total += 0.5;
-      if(!p) score += 0.5;                      // boş kalması gereken yeri temiz bırakmak da puan
-      else score += 0.5 * Math.max(0, 1 - p.w/0.6) * 0.3;
-    }
+    if(!t) continue;
+    total++;
+    if(p) score += Math.max(0, 1 - dist2(t,p.c)/170);
   }
   matchPct = Math.round(100*score/total);
   updateHUD();
@@ -520,6 +530,7 @@ function resize(){
   const room = H - launchY - 24;
   maxPull = Math.max(60, Math.min(Math.min(W,H)*0.32, room*0.88));
   maxRange = Math.hypot(gridSize/2 + cell, launchY - gridY + cell);
+  if(target.length) buildAreaPath();     // hücre ölçüsü değişti, alan yolu yenilenir
 }
 window.addEventListener('resize', resize);
 
@@ -624,9 +635,19 @@ function drawGrid(){
                           [ox+wall*0.62,oy+os-wall*0.62],[ox+os-wall*0.62,oy+os-wall*0.62]]){
     ctx.beginPath(); ctx.arc(cx0, cy0, wall*0.26, 0, 6.283); ctx.fill();
   }
-  // tuval
-  ctx.fillStyle = '#fff';
+  // iç alan: her yer duvar, sadece resmin silüeti oynanabilir tuval olarak açılır
+  ctx.fillStyle = '#4a5265';
   ctx.fillRect(gridX, gridY, gridSize, gridSize);
+  if(!areaPath) buildAreaPath();
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = wall*0.8;
+  ctx.fillStyle = '#fff'; ctx.fill(areaPath);
+  ctx.restore();
+  // duvarın oyuğa bakan kenarında ışık
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 3;
+  ctx.stroke(areaPath);
+  ctx.restore();
 
   // silik hedef resim
   for(let y=0;y<N;y++) for(let x=0;x<N;x++){
@@ -662,7 +683,9 @@ function drawGrid(){
     } else put();
   }
   ctx.restore();
-  // grid çizgileri
+  // grid çizgileri — sadece oyun alanının içinde
+  ctx.save();
+  ctx.clip(areaPath);
   ctx.strokeStyle = 'rgba(0,0,0,.09)'; ctx.lineWidth = 1;
   ctx.beginPath();
   for(let i=0;i<=N;i++){
@@ -670,8 +693,10 @@ function drawGrid(){
     ctx.moveTo(gridX, gridY+i*cell+.5); ctx.lineTo(gridX+gridSize, gridY+i*cell+.5);
   }
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
-  ctx.strokeRect(gridX-1, gridY-1, gridSize+2, gridSize+2);
+  ctx.restore();
+  // alanın dış hattı
+  ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 2;
+  ctx.stroke(areaPath);
 }
 
 // ang: uzun eksenin yöneleceği açı, st: gerilme (1 = normal, >1 uzun-ince)
@@ -719,6 +744,7 @@ function drawBlockPiece(x, y, b, scale){
   for(let j=0;j<b.h;j++) for(let i=0;i<b.w;i++) drawCube(i*u, j*u, u, b.col);
   // ölçü etiketi küpleri boğmasın: küçük, yarı saydam bir rozet
   const fs = Math.max(9, Math.min(22, cell*s*0.62));
+  if(w < fs*2.6 || h < fs*1.6){ ctx.restore(); return; }   // küçük blokta rozet sığmaz
   ctx.font = 'bold '+fs+'px system-ui';
   ctx.textAlign='center'; ctx.textBaseline='middle';
   const label = b.w+'×'+b.h, tw = ctx.measureText(label).width;
