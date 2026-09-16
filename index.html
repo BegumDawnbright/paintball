@@ -115,7 +115,9 @@ const sfx = {
   empty(){ tone(150, 0.12, 0.06, 'square'); },                   // balon bitti
   reach(){ burst(0.24, 300, 1400, 0.07, 2.0); },                 // el uzanırken kayma sesi
   stick(){ burst(0.10, 1800, 500, 0.20, 1.6);                    // blok yerine yapışır
-           tone(180, 0.09, 0.10, 'square'); }
+           tone(180, 0.09, 0.10, 'square'); },
+  bump(){ burst(0.09, 320, 120, 0.16, 1.1);                      // duvara çarptı
+          tone(95, 0.08, 0.07, 'square'); }
 };
 
 /* ---------------- renk yardımcıları ---------------- */
@@ -302,7 +304,7 @@ const LEVELS = [
 
 /* ---------------- durum ---------------- */
 const N = 16;
-let W, H, cell, gridX, gridY, gridSize, launchX, launchY;
+let W, H, cell, gridX, gridY, gridSize, launchX, launchY, wall = 12;
 let level = 0, target = [], paint = [], ammo = 0, queue = [], deck = [], matchPct = 0;
 let drag = null, flying = null, splats = [], state = 'menu';
 let mode = 'paint';          // 'paint' = sapanla balon, 'block' = yapışkan el blok koyar
@@ -424,13 +426,16 @@ function buildDeck(art, cols){
 }
 
 // bloğun sol-üst kare indeksi (merkez noktadan hizalanır, tuval dışına taşmaz)
-function blockOrigin(cx, cy, b){
+function blockOrigin(cx, cy, b, clamp){
   let ox = Math.round((cx-gridX)/cell - b.w/2);
   let oy = Math.round((cy-gridY)/cell - b.h/2);
+  if(clamp === false) return [ox, oy];          // duvar kontrolü için ham değer
   ox = Math.max(0, Math.min(N-b.w, ox));
   oy = Math.max(0, Math.min(N-b.h, oy));
   return [ox, oy];
 }
+// blok duvarların içine sığıyor mu?
+function fits(ox, oy, b){ return ox>=0 && oy>=0 && ox+b.w<=N && oy+b.h<=N; }
 // bu atışın boyayacağı kareler — hepsi tam kaplama
 function splatCells(cx, cy, b){
   const [ox,oy] = blockOrigin(cx,cy,b), out = [];
@@ -504,7 +509,8 @@ function computeMatch(){
 function resize(){
   W = cv.width = window.innerWidth;
   H = cv.height = window.innerHeight;
-  gridSize = Math.min(W*0.92, H*0.62);
+  wall = Math.max(9, Math.min(W,H)*0.026);
+  gridSize = Math.min(W*0.92, H*0.62) - wall*2;
   cell = gridSize/N;
   gridX = (W-gridSize)/2;
   gridY = Math.max(64, H*0.10);
@@ -557,8 +563,12 @@ function up(e){
   if(!drag) return;
   e.preventDefault();
   if(mode === 'block'){
-    // blok modunda dokunulan yere konur; tuvalden çok uzağa basıldıysa iptal
-    if(queue[0] && drag.y < gridY + gridSize + cell*2) place(drag.x, drag.y);
+    const b = queue[0];
+    if(b && drag.y < gridY + gridSize + cell*2){
+      const [ox,oy] = blockOrigin(drag.x, drag.y, b, false);
+      if(fits(ox,oy,b)) place(ox, oy);
+      else sfx.bump();                 // duvara çarptı: blok harcanmaz
+    }
     drag = null;
     return;
   }
@@ -569,10 +579,9 @@ function up(e){
 }
 
 // blok modu: yapışkan el uzanıp bloğu yerine koyar
-function place(px, py){
+function place(ox, oy){
   const b = queue.shift();
   if(deck.length) queue.push(deck.shift());
-  const [ox,oy] = blockOrigin(px, py, b);
   ammo--; updateHUD();
   sfx.reach();
   hand = { b, tx: gridX+(ox+b.w/2)*cell, ty: gridY+(oy+b.h/2)*cell, t:0, phase:'out' };
@@ -594,6 +603,27 @@ cv.addEventListener('touchend',up,{passive:false}); cv.addEventListener('touchca
 function rgbs(c,a){ return 'rgba('+c[0]+','+c[1]+','+c[2]+','+(a===undefined?1:a)+')'; }
 
 function drawGrid(){
+  // oyun alanını çevreleyen duvar — bloklar bu kabın dışına konamaz
+  const ox = gridX-wall, oy = gridY-wall, os = gridSize+wall*2;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = wall*1.2; ctx.shadowOffsetY = wall*0.35;
+  rr(ctx, ox, oy, os, os, wall*1.1);
+  ctx.fillStyle = '#3d4455'; ctx.fill();
+  ctx.restore();
+  // duvarın üst ışığı ve iç gölgesi
+  ctx.save();
+  rr(ctx, ox, oy, os, os, wall*1.1); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.14)';
+  ctx.fillRect(ox, oy, os, wall*0.42);
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  ctx.fillRect(ox, oy+os-wall*0.4, os, wall*0.4);
+  ctx.restore();
+  // köşe perçinleri
+  ctx.fillStyle = 'rgba(0,0,0,.22)';
+  for(const [cx0,cy0] of [[ox+wall*0.62,oy+wall*0.62],[ox+os-wall*0.62,oy+wall*0.62],
+                          [ox+wall*0.62,oy+os-wall*0.62],[ox+os-wall*0.62,oy+os-wall*0.62]]){
+    ctx.beginPath(); ctx.arc(cx0, cy0, wall*0.26, 0, 6.283); ctx.fill();
+  }
   // tuval
   ctx.fillStyle = '#fff';
   ctx.fillRect(gridX, gridY, gridSize, gridSize);
@@ -735,19 +765,28 @@ function drawPreview(){
 
   if(mode === 'block'){
     if(drag.y > gridY + gridSize + cell*2) return;
-    const [ox,oy] = blockOrigin(drag.x, drag.y, b);
+    const [ox,oy] = blockOrigin(drag.x, drag.y, b, false);
+    const ok = fits(ox, oy, b);
     const tx = gridX+(ox+b.w/2)*cell, ty = gridY+(oy+b.h/2)*cell;
     ctx.save();
-    ctx.setLineDash([5,5]); ctx.lineWidth = 2;        // elin uzanacağı yol
-    ctx.strokeStyle = 'rgba(255,255,255,.22)';
-    ctx.beginPath(); ctx.moveTo(launchX,launchY); ctx.lineTo(tx,ty); ctx.stroke();
-    ctx.setLineDash([]);
-    for(const s of splatCells(tx,ty,b)){
-      ctx.fillStyle = rgbs(b.col, .45);
-      ctx.fillRect(gridX+s.x*cell, gridY+s.y*cell, cell, cell);
+    if(ok){
+      ctx.setLineDash([5,5]); ctx.lineWidth = 2;        // elin uzanacağı yol
+      ctx.strokeStyle = 'rgba(255,255,255,.22)';
+      ctx.beginPath(); ctx.moveTo(launchX,launchY); ctx.lineTo(tx,ty); ctx.stroke();
+      ctx.setLineDash([]);
+      for(let j=0;j<b.h;j++) for(let i=0;i<b.w;i++){
+        ctx.fillStyle = rgbs(b.col, .45);
+        ctx.fillRect(gridX+(ox+i)*cell, gridY+(oy+j)*cell, cell, cell);
+      }
+      ctx.lineWidth = 2.5; ctx.setLineDash([6,5]);
+      ctx.strokeStyle = rgbs(b.col, .95);
+    } else {
+      // duvara taşıyor: geçersiz, buraya konamaz
+      ctx.fillStyle = 'rgba(255,70,70,.18)';
+      ctx.fillRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
+      ctx.lineWidth = 3; ctx.setLineDash([7,5]);
+      ctx.strokeStyle = 'rgba(255,80,80,.95)';
     }
-    ctx.lineWidth = 2.5; ctx.setLineDash([6,5]);
-    ctx.strokeStyle = rgbs(b.col, .95);
     ctx.strokeRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
     ctx.restore();
     return;
