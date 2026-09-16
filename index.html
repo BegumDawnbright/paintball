@@ -131,24 +131,24 @@ function mixPaint(a, wa, b, wb){
 function dist2(a,b){ const dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2]; return Math.sqrt(dr*dr+dg*dg+db*db); }
 
 /* ---------------- bölümler ---------------- */
-const PAL = { r:'#e5384a', o:'#f08a2c', y:'#f5cf3d', g:'#4bb85f', b:'#3a7fd5', p:'#8b53c9', k:'#3b3f4a', w:'#ffffff', c:'#45c3c9', m:'#e06aa8' };
+const PAL = { r:'#e5384a', o:'#f08a2c', y:'#f5cf3d', g:'#4bb85f', b:'#3a7fd5', p:'#8b53c9', k:'#3b3f4a', w:'#ffffff', c:'#45c3c9', m:'#e06aa8', n:'#8a5a2b' };
 const LEVELS = [
-  { name:'Kalp', goal:70, cols:['r','y','b','w'], art:[
+  { name:'Elma', goal:70, art:[
     '................',
-    '................',
-    '...rr......rr...',
-    '..rrrr....rrrr..',
-    '.rrrrrr..rrrrrr.',
+    '.......nn.......',
+    '.......nn.gg....',
+    '.......nngggg...',
+    '...rrrr..rrrr...',
+    '..rrrrrrrrrrrr..',
+    '.rryyrrrrrrrrrr.',
+    '.rryyrrrrrrrrrr.',
+    '.rrrrrrrrrrrrrr.',
     '.rrrrrrrrrrrrrr.',
     '.rrrrrrrrrrrrrr.',
     '..rrrrrrrrrrrr..',
+    '..rrrrrrrrrrrr..',
     '...rrrrrrrrrr...',
-    '....rrrrrrrr....',
     '.....rrrrrr.....',
-    '......rrrr......',
-    '.......rr.......',
-    '................',
-    '................',
     '................'] },
   { name:'Çiçek', goal:66, cols:['r','y','b','g'], art:[
     '................',
@@ -608,7 +608,7 @@ function drawQueue(){
   const b3 = W - 34, bx = b3 - 46;
   ctx.save();
   ctx.font = '11px system-ui'; ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.textAlign='center';
-  ctx.fillText('SIRADAKİ', (bx+b3)/2, y-34);
+  ctx.fillText('SIRADAKİ', (bx+b3)/2, y-46);
   ctx.restore();
   if(queue[1]) drawBalloon(bx, y, queue[1], 0.8);
   if(queue[2]) drawBalloon(b3, y, queue[2], 0.6);
