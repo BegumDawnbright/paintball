@@ -151,6 +151,63 @@ function mixPaint(a, wa, b, wb){
   l = Math.max(0.05, l);
   return hsl2rgb(h, Math.min(1,s*1.05), l);
 }
+/* ---------------- jelly küp dokusu ---------------- */
+function shade(c, k){   // k>0 açar, k<0 koyultur
+  return k >= 0 ? [c[0]+(255-c[0])*k, c[1]+(255-c[1])*k, c[2]+(255-c[2])*k]
+                : [c[0]*(1+k), c[1]*(1+k), c[2]*(1+k)];
+}
+function rr(g, x, y, w, h, r){
+  if(g.roundRect){ g.beginPath(); g.roundRect(x,y,w,h,r); }
+  else { g.beginPath(); g.rect(x,y,w,h); }
+}
+const cubeCache = new Map();
+// tek bir 1×1 jöle küpü: eğimli kenarlar + iç jel + parlama. Yan yana dizilince blok olur.
+function cubeTex(c, size){
+  const S = Math.max(6, Math.round(size));
+  const key = (c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+','+S;
+  let t = cubeCache.get(key);
+  if(t) return t;
+  if(cubeCache.size > 260) cubeCache.clear();
+  t = document.createElement('canvas');
+  t.width = t.height = S;
+  const g = t.getContext('2d');
+  const b = S*0.19;
+  // taban: en koyu ton (küpün yan yüzleri)
+  g.fillStyle = rgbs(shade(c,-0.45));
+  rr(g, 0.5, 0.5, S-1, S-1, S*0.16); g.fill();
+  // üst yüz — ışık üstten
+  g.fillStyle = rgbs(shade(c, 0.5));
+  g.beginPath(); g.moveTo(1,1); g.lineTo(S-1,1); g.lineTo(S-b,b); g.lineTo(b,b); g.closePath(); g.fill();
+  // sol yüz
+  g.fillStyle = rgbs(shade(c, 0.18));
+  g.beginPath(); g.moveTo(1,1); g.lineTo(b,b); g.lineTo(b,S-b); g.lineTo(1,S-1); g.closePath(); g.fill();
+  // sağ yüz
+  g.fillStyle = rgbs(shade(c,-0.22));
+  g.beginPath(); g.moveTo(S-1,1); g.lineTo(S-1,S-1); g.lineTo(S-b,S-b); g.lineTo(S-b,b); g.closePath(); g.fill();
+  // iç jel gövdesi
+  const gr = g.createLinearGradient(0,b,0,S-b);
+  gr.addColorStop(0, rgbs(shade(c, 0.22)));
+  gr.addColorStop(0.55, rgbs(c));
+  gr.addColorStop(1, rgbs(shade(c,-0.18)));
+  g.fillStyle = gr;
+  rr(g, b, b, S-2*b, S-2*b, (S-2*b)*0.3); g.fill();
+  // jöle parlaması
+  g.fillStyle = 'rgba(255,255,255,.42)';
+  rr(g, b*1.5, b*1.4, (S-2*b)*0.42, (S-2*b)*0.3, S*0.08); g.fill();
+  g.fillStyle = 'rgba(255,255,255,.14)';
+  rr(g, b*1.5, b*1.4, (S-2*b)*0.72, (S-2*b)*0.62, S*0.1); g.fill();
+  // dış hat
+  g.strokeStyle = 'rgba(0,0,0,.28)'; g.lineWidth = Math.max(1, S*0.035);
+  rr(g, 0.5, 0.5, S-1, S-1, S*0.16); g.stroke();
+  cubeCache.set(key, t);
+  return t;
+}
+function drawCube(x, y, s, c, alpha){
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.drawImage(cubeTex(c, s), x, y, s, s);
+  ctx.globalAlpha = 1;
+}
+
 function dist2(a,b){ const dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2]; return Math.sqrt(dr*dr+dg*dg+db*db); }
 
 /* ---------------- bölümler ---------------- */
@@ -541,13 +598,19 @@ function drawGrid(){
   for(let y=0;y<N;y++) for(let x=0;x<N;x++){
     const p = paint[y][x];
     if(!p) continue;
-    ctx.fillStyle = rgbs(p.c, Math.min(1, 0.55 + p.w*0.35));
-    if(p.pop > 0){                       // yeni boyanan kare şişip oturur
-      const s = 1 + 0.45*p.pop, cx0 = gridX+(x+0.5)*cell, cy0 = gridY+(y+0.5)*cell;
+    const px0 = gridX+x*cell, py0 = gridY+y*cell;
+    // blok modunda her kare bir jöle küpü, boya modunda düz boya
+    const put = () => {
+      if(mode === 'block') drawCube(px0, py0, cell, p.c, Math.min(1, 0.8 + p.w*0.2));
+      else { ctx.fillStyle = rgbs(p.c, Math.min(1, 0.55 + p.w*0.35));
+             ctx.fillRect(px0, py0, cell, cell); }
+    };
+    if(p.pop > 0){                       // yeni konan kare şişip oturur
+      const s = 1 + 0.45*p.pop, cx0 = px0+cell/2, cy0 = py0+cell/2;
       ctx.save(); ctx.translate(cx0,cy0); ctx.scale(s,s); ctx.translate(-cx0,-cy0);
-      ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+      put();
       ctx.restore();
-    } else ctx.fillRect(gridX+x*cell, gridY+y*cell, cell, cell);
+    } else put();
   }
   ctx.restore();
   // grid çizgileri
@@ -600,22 +663,20 @@ function drawBlockPiece(x, y, b, scale){
   const s = scale||1, w = b.w*cell*s, h = b.h*cell*s;
   ctx.save();
   ctx.translate(x-w/2, y-h/2);
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.fillRect(3, 4, w, h);                       // gölge
-  ctx.fillStyle = rgbs(b.col);
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = 'rgba(255,255,255,.22)';        // üst kenar ışığı
-  ctx.fillRect(0, 0, w, Math.max(2, h*0.14));
-  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, w-2, h-2);
-  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 1;
-  for(let i=1;i<b.w;i++){ ctx.beginPath(); ctx.moveTo(i*cell*s,0); ctx.lineTo(i*cell*s,h); ctx.stroke(); }
-  for(let j=1;j<b.h;j++){ ctx.beginPath(); ctx.moveTo(0,j*cell*s); ctx.lineTo(w,j*cell*s); ctx.stroke(); }
-  const lum = (b.col[0]*0.3+b.col[1]*0.6+b.col[2]*0.1);
-  ctx.fillStyle = lum>150 ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.85)';
-  ctx.font = 'bold '+Math.max(9, Math.min(w,h)*0.42)+'px system-ui';
+  ctx.fillStyle = 'rgba(0,0,0,.3)';               // gölge
+  rr(ctx, 4, 6, w, h, cell*s*0.16); ctx.fill();
+  // her 1×1 ayrı jöle küpü, birleşip bloğu oluşturur
+  const u = cell*s;
+  for(let j=0;j<b.h;j++) for(let i=0;i<b.w;i++) drawCube(i*u, j*u, u, b.col);
+  // ölçü etiketi küpleri boğmasın: küçük, yarı saydam bir rozet
+  const fs = Math.max(9, Math.min(22, cell*s*0.62));
+  ctx.font = 'bold '+fs+'px system-ui';
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(b.w+'×'+b.h, w/2, h/2);
+  const label = b.w+'×'+b.h, tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(0,0,0,.42)';
+  rr(ctx, w/2-tw/2-6, h/2-fs*0.7, tw+12, fs*1.4, fs*0.7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.95)';
+  ctx.fillText(label, w/2, h/2);
   ctx.restore();
 }
 
@@ -708,13 +769,13 @@ function drawQueue(){
   const y = launchY;
   if(mode === 'block'){
     drawBlockPiece(launchX, y, queue[0], 1);
-    const b3 = W - 34 - cell*0.6, bx = b3 - cell*2.1;
+    const b3 = W - 30 - cell*0.9, bx = b3 - cell*2.8;
     ctx.save();
     ctx.font = '11px system-ui'; ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.textAlign='center';
-    ctx.fillText('SIRADAKİ', (bx+b3)/2, y - cell*1.5);
+    ctx.fillText('SIRADAKİ', (bx+b3)/2, y - cell*1.9);
     ctx.restore();
-    if(queue[1]) drawBlockPiece(bx, y, queue[1], 0.42);
-    if(queue[2]) drawBlockPiece(b3, y, queue[2], 0.32);
+    if(queue[1]) drawBlockPiece(bx, y, queue[1], 0.55);
+    if(queue[2]) drawBlockPiece(b3, y, queue[2], 0.42);
     return;
   }
   // gerdikçe balon lastikte geri kayar ve atış yönünde uzun-ince forma girer
