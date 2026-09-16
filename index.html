@@ -404,7 +404,15 @@ function artColors(art){
 }
 // balon boyutları: tam kare blokları — yarım kare yok, taşma yok
 const MAXB = 4;        // bir balon en fazla 4×4 kare boyar
-const SPARE = 0.12;    // parça sayısının bu kadarı fazladan 1×1 balon (hata telafisi)
+
+// bölüm biter: hedefe ulaşıldı ya da stok tükendi
+function checkEnd(){
+  if(state !== 'aim') return;
+  if(matchPct >= LEVELS[level].goal || ammo <= 0){
+    state = 'ending';
+    setTimeout(finish, 450);
+  }
+}
 
 function makeBalloon(cols, shape){
   const key = cols[(Math.random()*cols.length)|0];
@@ -440,10 +448,10 @@ function decompose(art){
 
 // deste doğrudan resmin parçalarından kurulur → her balonun tam oturduğu bir yer vardır
 function buildDeck(art, cols){
+  // deste tam olarak resmin parçaları: fazladan/rastgele renkli blok yok,
+  // yoksa oyuncu onları da yerleştirmek zorunda kalıp resmi bozardı
   const parts = decompose(art);
   const out = parts.map(p => ({ col: hex2rgb(PAL[p.ch]), w:p.w, h:p.h }));
-  const spare = Math.max(1, Math.round(parts.length * SPARE));
-  for(let i=0;i<spare;i++) out.push(makeBalloon(cols, {w:1,h:1}));
   for(let i=out.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [out[i],out[j]]=[out[j],out[i]]; }
   return out;
 }
@@ -839,11 +847,25 @@ function drawPreview(){
       ctx.lineWidth = 2.5; ctx.setLineDash([6,5]);
       ctx.strokeStyle = rgbs(b.col, .95);
     } else {
-      // duvara taşıyor: geçersiz, buraya konamaz
-      ctx.fillStyle = 'rgba(255,70,70,.18)';
-      ctx.fillRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
+      // geçersiz: blok rengiyle karışmasın diye renk değil desen kullanılır
+      const bx0 = gridX+ox*cell, by0 = gridY+oy*cell, bw = b.w*cell, bh = b.h*cell;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(bx0, by0, bw, bh); ctx.clip();
+      ctx.fillStyle = 'rgba(18,20,26,.62)';
+      ctx.fillRect(bx0, by0, bw, bh);
+      ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      for(let d=-bh; d<bw; d+=13){ ctx.moveTo(bx0+d, by0); ctx.lineTo(bx0+d+bh, by0+bh); }
+      ctx.stroke();
+      ctx.restore();
+      // yasak işareti
+      const mx = bx0+bw/2, my = by0+bh/2, rr0 = Math.min(bw,bh)*0.26;
+      ctx.lineWidth = Math.max(3, rr0*0.3); ctx.strokeStyle = 'rgba(255,255,255,.92)';
+      ctx.beginPath(); ctx.arc(mx, my, rr0, 0, 6.283); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mx-rr0*0.7, my+rr0*0.7); ctx.lineTo(mx+rr0*0.7, my-rr0*0.7); ctx.stroke();
       ctx.lineWidth = 3; ctx.setLineDash([7,5]);
-      ctx.strokeStyle = 'rgba(255,80,80,.95)';
+      ctx.strokeStyle = 'rgba(255,255,255,.9)';
     }
     ctx.strokeRect(gridX+ox*cell, gridY+oy*cell, b.w*cell, b.h*cell);
     ctx.restore();
@@ -967,7 +989,7 @@ function loop(now){
       spawnBurst(flying.tx, flying.ty, flying.b.col, before);
       splats.push({x:flying.tx, y:flying.ty, c:flying.b.col, r:Math.max(flying.b.w, flying.b.h)*cell*0.5, t:0});
       flying = null;
-      if(ammo<=0) setTimeout(finish, 500);
+      checkEnd();
     }
   }
 
@@ -999,7 +1021,7 @@ function loop(now){
       hand.t -= dt/0.22;
       if(hand.t <= 0){
         hand = null;
-        if(ammo <= 0) setTimeout(finish, 400);
+        checkEnd();
       }
     }
     drawHand();
